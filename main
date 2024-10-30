@@ -1,0 +1,647 @@
+#Reference from ccit 
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This template is to build website infra with high security, high availability and Scaling
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Web Autoscaling Group Configuration"
+        Parameters:
+          - WebAsgMax
+          - WebAsgMin
+          - WebAsgDesired
+    ParameterLabels:
+      WebAsgMax:
+        default: "Maximum Instances in Autoscaling Group"
+      WebAsgMin:
+        default: "Minimum Instances in Autoscaling Group"
+      WebAsgDesired:
+        default: "Desired Instances in Autoscaling Group"
+    Description: |
+      This CloudFormation Template (CFT) is designed to create a high-availability and secure website environment.
+      Key components include:
+      - VPC with private and public subnets across multiple availability zones.
+      - Autoscaling group of EC2 instances for the website backend.
+      - Load Balancer with Route 53 record setup for the domain.
+      - NAT Gateway for internet access for private subnets.
+      - Security groups, IAM roles, and other resources for security and access control.
+      
+
+Mappings:
+# Mapping for Region-specific AMI IDs
+  RegionMap:
+    us-east-1:
+      AMI: ami-0ddc798b3f1a5117e
+      InstanceType: t2.micro
+
+    ap-southeast-1:
+      AMI: ami-0ef1a6822965893ba
+      InstanceType: t2.micro
+      
+    ca-central-1:
+      AMI: ami-074c42dd5ddb28c14
+      InstanceType: t2.micro
+      
+    ap-south-1:
+      AMI: ami-0e0e417dfa2028266
+      InstanceType: t2.micro
+      
+    ap-south-2:
+      AMI: ami-0a74efd95b7028f59
+      InstanceType: t3.micro    
+      
+
+Parameters:
+  WebAsgMax:
+    AllowedPattern: ^([0-0]?[0-9]|10)$
+    ConstraintDescription: Must be a number between 1 and 30.
+    Default: 3
+    Description: Specifies the maximum number of EC2 instances in the Web Autoscaling Group.
+    Type: String
+  WebAsgMin:
+    AllowedPattern: ^([0-0]?[0-9]|10)$
+    ConstraintDescription: Must be a number between 0 and 10.
+    Default: 3
+    Description: Specifies the minimum number of EC2 instances in the Web Autoscaling Group.
+    Type: String
+  WebAsgDesired:
+    AllowedPattern: ^([0-0]?[0-9]|10)$
+    ConstraintDescription: Must be a number between 0 and 10.
+    Default: 3
+    Description: Specifies the Desired of EC2 instances in the Web Autoscaling Group.
+    Type: String
+
+
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/22
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: CCIT-VPC
+          
+# create 3 Private Subnets
+#****************************************
+# First Private Subnet
+  CCITPrivSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.0/25
+      AvailabilityZone: !Select [0,!GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CCIT-Priv-subnet1
+          
+# Second Private Subnet
+
+  CCITPrivSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.128/25
+      AvailabilityZone: !Select [1,!GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CCIT-Priv-subnet2
+
+
+# Third Private Subnet
+
+  CCITPrivSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/25
+      AvailabilityZone: !Select [2,!GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CCIT-Priv-subnet3
+          
+
+# create 3 Public Subnets
+#****************************************
+# First Public Subnet
+  CCITPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/25
+      AvailabilityZone: !Select [0,!GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CCIT-Pub-subnet1
+          
+# Second Public Subnet
+
+  CCITPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.128/25
+      AvailabilityZone: !Select [1,!GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CCIT-Pub-subnet2
+
+
+# Third Public Subnet
+
+  CCITPublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [2,!GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CCIT-Pub-subnet3
+          
+# Create Internet Gateway and attach it to the VPC
+#**************************************************
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: CCIT-IGW
+  
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+      
+# Create Public and Private Route Tables
+#****************************************
+
+# Public Route Tables
+  CCITRTPub:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: CCIT-RT-Pub
+  
+
+  # Private Route Tables
+  CCITRTPriv:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: CCIT-RT-Priv
+
+# Setup public routes and assign public subnets to the Route Table
+#******************************************************************
+# Crate Public Route in the Public Route table
+
+  CCITRTPubDefaultIPv4:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId:
+        Ref: CCITRTPub
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId:
+        Ref: InternetGateway     
+        
+
+# Assign Public subnets to the Route table        
+  CCITRTAssociationPub1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CCITPublicSubnet1
+      RouteTableId:
+        Ref: CCITRTPub 
+
+  CCITRTAssociationPub2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CCITPublicSubnet2
+      RouteTableId:
+        Ref: CCITRTPub           
+          
+  CCITRTAssociationPub3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CCITPublicSubnet3
+      RouteTableId:
+        Ref: CCITRTPub 
+
+
+# Setup Assign Private Subnets to the Route tables
+#*******************************************************
+
+# Assign Private subnets to the Route table 
+
+  CCITRTPubDefaultIPv5:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId:
+        Ref: CCITRTPriv
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId:
+        Ref: InternetGateway    
+
+
+  CCITRTAssociationPriv1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CCITPrivSubnet1
+      RouteTableId:
+        Ref: CCITRTPriv 
+
+  CCITRTAssociationPriv2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CCITPrivSubnet2
+      RouteTableId:
+        Ref: CCITRTPriv           
+          
+  CCITRTAssociationPriv3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CCITPrivSubnet3
+      RouteTableId:
+        Ref: CCITRTPriv
+
+
+# #*******************************************************
+# # Create NATGateway, ElasticIP and attach the NAT Route to the Private Route table
+
+# # To create Elastic IP
+#   MyNatGatewayEIP:
+#     Type: AWS::EC2::EIP
+#     Properties:
+#       Domain: vpc
+
+
+# # Create NAT Gateway with Public access
+
+#   MyNatGateway:
+#     Type: AWS::EC2::NatGateway
+#     Properties:
+#       AllocationId: !GetAtt MyNatGatewayEIP.AllocationId  # Attach the EIP to the NAT Gateway
+#       SubnetId: !Ref CCITPublicSubnet1  # Reference to the public subnet where the NAT Gateway will be created
+#       ConnectivityType: public  # Set to 'public' for public NAT Gateway
+
+# # Setup Route in the private route table to redirect traffic to the NAT Gateway
+
+#   MyPrivateRoute:
+#     Type: AWS::EC2::Route
+#     Properties:
+#       RouteTableId: !Ref CCITRTPriv
+#       DestinationCidrBlock: 0.0.0.0/0  # All outbound traffic
+#       NatGatewayId: !Ref MyNatGateway  # Reference to the NAT Gateway      
+
+
+#*******************************************************
+
+# Create Security Group
+
+  CCITSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Access HTTP
+      Tags:
+        - Key: Name
+          Value: CCIT-SG
+      SecurityGroupIngress:
+        - Description: 'Allow HTTP Ports'
+          IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          Cidrip: '0.0.0.0/0'
+        - Description: 'Allow SSH Ports'
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          Cidrip: '0.0.0.0/0'
+
+
+# Create Instance profile and add the role the to profile
+# 'MyAdminRole' --> 'Service or use case -- EC2' permissions --> Administrator access
+# Create IAM Role
+
+  MyAdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MyAdminRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AdminAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+
+  MyIamInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    DependsOn: MyAdminRole  # Ensure MyAdminRole is created first
+    Properties:
+      InstanceProfileName: MyIamInstanceProfile
+      Path: "/"
+      Roles:
+        - !Ref MyAdminRole
+
+
+
+#*******************************************************
+#Create Launch Template
+  MyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: MyLaunchTemplate
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt
+            - MyIamInstanceProfile
+            - Arn
+        DisableApiTermination: false
+        ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+        InstanceType: !FindInMap [RegionMap, !Ref "AWS::Region", InstanceType]
+        #KeyName: ccit-kp-dotnet
+        SecurityGroupIds:
+          - !Ref CCITSG
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install -y httpd git
+            sudo systemctl start httpd
+            sudo systemctl enable httpd
+            git clone https://github.com/Cloudintelugu/ccitwebsite.git
+            cp -r ccitwebsite/* /var/www/html
+
+
+#Create Auto Scaling Group
+
+  ASG: 
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties: 
+      VPCZoneIdentifier:
+        - !Ref CCITPrivSubnet1
+        - !Ref CCITPrivSubnet2
+        - !Ref CCITPrivSubnet3
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MyLaunchTemplate
+        Version: "1"
+      MaxSize: !Ref WebAsgMax
+      MinSize: !Ref WebAsgMin
+      DesiredCapacity: !Ref WebAsgDesired
+      Tags:
+        - Key: "Name"
+          Value: "Web"
+          PropagateAtLaunch: true
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref ALBTG              
+
+
+# Create Target Group
+
+  ALBTG:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /index.html
+      HealthCheckTimeoutSeconds: 5
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref VPC
+      TargetGroupAttributes:
+        - Key: stickiness.enabled 
+          Value: false
+
+
+# Create Load balancer
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties: 
+      IpAddressType: "ipv4"
+      Scheme: "internet-facing"
+      SecurityGroups: 
+        - !Ref CCITSG
+      Subnets: 
+        - !Ref CCITPublicSubnet1
+        - !Ref CCITPublicSubnet2
+        - !Ref CCITPublicSubnet3
+      Tags: 
+        - Key: Name
+          Value: !Join [ '', [ 'ALB-', !Ref 'AWS::StackName' ] ]
+      Type: "application"          
+
+# Create Listner
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTG
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+
+# # Route 53 Hosted Zone (Only if you don’t have an existing hosted zone)
+# # Uncomment the following lines to create a new hosted zone, or provide the HostedZoneId manually in the record set if using an existing zone.
+
+# # Route53HostedZone:
+# #   Type: AWS::Route53::HostedZone
+# #   Properties:
+# #     Name: "example.com"  # Replace with your domain name
+
+# # Create an Alias Record for the ALB in the Route 53 hosted zone
+#   Route53RecordSet:
+#     Type: AWS::Route53::RecordSet
+#     Properties:
+#       HostedZoneId: "Z0214396QYGWERH2KUDM" # Replace with the Hosted Zone ID, or use !Ref Route53HostedZone if creating it in this template
+#       Name: "nagaccit.com"        # Replace with the desired subdomain (e.g., "www.example.com")
+#       Type: A
+#       AliasTarget:
+#         DNSName: !GetAtt ALB.DNSName
+#         HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+
+
+
+# Outputs:
+#   # VPC Information
+#   VPCId:
+#     Description: "ID of the created VPC"
+#     Value: !Ref VPC
+#     Export:
+#       Name: "VPCId"
+
+#   # Subnets
+#   PrivateSubnet1:
+#     Description: "ID of the first private subnet"
+#     Value: !Ref CCITPrivSubnet1
+#     Export:
+#       Name: "PrivateSubnet1"
+
+#   PrivateSubnet2:
+#     Description: "ID of the second private subnet"
+#     Value: !Ref CCITPrivSubnet2
+#     Export:
+#       Name: "PrivateSubnet2"
+
+#   PrivateSubnet3:
+#     Description: "ID of the third private subnet"
+#     Value: !Ref CCITPrivSubnet3
+#     Export:
+#       Name: "PrivateSubnet3"
+
+#   PublicSubnet1:
+#     Description: "ID of the first public subnet"
+#     Value: !Ref CCITPublicSubnet1
+#     Export:
+#       Name: "PublicSubnet1"
+
+#   PublicSubnet2:
+#     Description: "ID of the second public subnet"
+#     Value: !Ref CCITPublicSubnet2
+#     Export:
+#       Name: "PublicSubnet2"
+
+#   PublicSubnet3:
+#     Description: "ID of the third public subnet"
+#     Value: !Ref CCITPublicSubnet3
+#     Export:
+#       Name: "PublicSubnet3"
+
+#   # Internet Gateway
+#   InternetGatewayId:
+#     Description: "ID of the Internet Gateway"
+#     Value: !Ref InternetGateway
+#     Export:
+#       Name: "InternetGatewayId"
+
+#   # NAT Gateway and Elastic IP
+#   NatGatewayId:
+#     Description: "ID of the NAT Gateway"
+#     Value: !Ref MyNatGateway
+#     Export:
+#       Name: "NatGatewayId"
+
+#   NatGatewayElasticIP:
+#     Description: "Elastic IP associated with the NAT Gateway"
+#     Value: !Ref MyNatGatewayEIP
+#     Export:
+#       Name: "NatGatewayElasticIP"
+
+#   # Route Tables
+#   PublicRouteTableId:
+#     Description: "ID of the public route table"
+#     Value: !Ref CCITRTPub
+#     Export:
+#       Name: "PublicRouteTableId"
+
+#   PrivateRouteTableId:
+#     Description: "ID of the private route table"
+#     Value: !Ref CCITRTPriv
+#     Export:
+#       Name: "PrivateRouteTableId"
+
+#   # Security Group
+#   SecurityGroupId:
+#     Description: "ID of the Security Group for web servers"
+#     Value: !Ref CCITSG
+#     Export:
+#       Name: "SecurityGroupId"
+
+#   # IAM Role and Instance Profile
+#   IAMRoleName:
+#     Description: "Name of the IAM Role for EC2 instances"
+#     Value: !Ref MyAdminRole
+#     Export:
+#       Name: "IAMRoleName"
+
+#   InstanceProfileName:
+#     Description: "Name of the Instance Profile"
+#     Value: !Ref MyIamInstanceProfile
+#     Export:
+#       Name: "InstanceProfileName"
+
+#   # Launch Template
+#   LaunchTemplateId:
+#     Description: "ID of the EC2 Launch Template"
+#     Value: !Ref MyLaunchTemplate
+#     Export:
+#       Name: "LaunchTemplateId"
+
+#   # Auto Scaling Group
+#   AutoScalingGroupName:
+#     Description: "Name of the Auto Scaling Group"
+#     Value: !Ref ASG
+#     Export:
+#       Name: "AutoScalingGroupName"
+
+#   # Target Group
+#   TargetGroupARN:
+#     Description: "ARN of the Target Group"
+#     Value: !Ref ALBTG
+#     Export:
+#       Name: "TargetGroupARN"
+
+#   # Load Balancer
+#   LoadBalancerDNSName:
+#     Description: "DNS name of the Application Load Balancer"
+#     Value: !GetAtt ALB.DNSName
+#     Export:
+#       Name: "LoadBalancerDNSName"
+
+#   LoadBalancerCanonicalHostedZoneID:
+#     Description: "Canonical Hosted Zone ID of the Application Load Balancer"
+#     Value: !GetAtt ALB.CanonicalHostedZoneID
+#     Export:
+#       Name: "LoadBalancerCanonicalHostedZoneID"
+
+#   # Route 53 Record Set
+#   Route53RecordSet:
+#     Description: "Route 53 Record Set for the domain"
+#     Value: !Ref Route53RecordSet
+#     Export:
+#       Name: "Route53RecordSet"
+
+
+
+
+
+
+
+
+
+
+
+
+          
